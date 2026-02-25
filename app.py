@@ -6,6 +6,11 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import warnings
 warnings.filterwarnings("ignore")
+if "modelo" not in st.session_state:
+    st.session_state.modelo = None
+
+if "df_clean" not in st.session_state:
+    st.session_state.df_clean = None
 
 # ─────────────────────────────────────────────
 # CONFIGURACIÓN GENERAL
