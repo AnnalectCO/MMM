@@ -107,14 +107,17 @@ st.markdown('<div class="section-title">Modelado OLS – MMM</div>', unsafe_allo
 # 🔹 Métricas placeholder (luego puedes conectarlas al modelo real)
 col1, col2, col3 = st.columns(3)
 
-with col1:
-    st.metric("R²", "—")
+if st.session_state.modelo is not None:
+    metricas = calcular_metricas(st.session_state.modelo)
 
-with col2:
-    st.metric("Adj R²", "—")
-
-with col3:
-    st.metric("MAPE", "—")
+    col1.metric("R²", metricas["R²"])
+    col2.metric("Adj R²", metricas["Adj R²"])
+    col3.metric("MAPE", f'{metricas["MAPE"]}%')
+else:
+    col1.metric("R²", "—")
+    col2.metric("Adj R²", "—")
+    col3.metric("MAPE", "—")
+                
 # ─────────────────────────────────────────────
 #  FUNCIONES CORE
 # ─────────────────────────────────────────────
@@ -194,14 +197,17 @@ def ajustar_ols(df, target_col, x_cols):
 
 
 def calcular_metricas(modelo):
+    y_true = modelo.model.endog
+    y_pred = modelo.fittedvalues
+
+    # Evitar división por cero
+    y_true_safe = np.where(y_true == 0, np.finfo(float).eps, y_true)
+    mape = np.mean(np.abs((y_true - y_pred) / y_true_safe)) * 100
+
     return {
         "R²": round(modelo.rsquared, 4),
-        "R² adj.": round(modelo.rsquared_adj, 4),
-        "AIC": round(modelo.aic, 2),
-        "BIC": round(modelo.bic, 2),
-        "F-stat": round(modelo.fvalue, 2),
-        "p(F)": f"{modelo.f_pvalue:.2e}",
-        "Obs.": int(modelo.nobs),
+        "Adj R²": round(modelo.rsquared_adj, 4),
+        "MAPE": round(mape, 2),
     }
 
 
@@ -650,10 +656,10 @@ with tab5:
             st.markdown("### Métricas del Modelo")
 
             col1, col2, col3 = st.columns(3)
-            col1.metric("R²", metricas["R²"])
-            col2.metric("Adj R²", metricas["Adj R²"])
-            col3.metric("MAPE", metricas["MAPE"])
-
+            col1.metric("R²", metricas.get("R²", "NA"))
+            col2.metric("Adj R²", metricas.get("Adj R²", "NA"))
+            col3.metric("MAPE", f'{metricas.get("MAPE", "NA")}%')
+            
             if metricas["R²"] < 0.8:
                 st.warning("⚠️ R² bajo. Considera agregar variables o ajustar transformaciones.")
             else:
