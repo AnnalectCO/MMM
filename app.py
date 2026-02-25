@@ -98,26 +98,6 @@ st.markdown("""
     </p>
 </div>
 """, unsafe_allow_html=True)
-
-# ─────────────────────────────────────────────
-# SECCIÓN MODELO
-# ─────────────────────────────────────────────
-st.markdown('<div class="section-title">Modelado OLS – MMM</div>', unsafe_allow_html=True)
-
-# 🔹 Métricas placeholder (luego puedes conectarlas al modelo real)
-col1, col2, col3 = st.columns(3)
-
-if st.session_state.modelo is not None:
-    metricas = calcular_metricas(st.session_state.modelo)
-
-    col1.metric("R²", metricas["R²"])
-    col2.metric("Adj R²", metricas["Adj R²"])
-    col3.metric("MAPE", f'{metricas["MAPE"]}%')
-else:
-    col1.metric("R²", "—")
-    col2.metric("Adj R²", "—")
-    col3.metric("MAPE", "—")
-                
 # ─────────────────────────────────────────────
 #  FUNCIONES CORE
 # ─────────────────────────────────────────────
@@ -322,6 +302,26 @@ with st.sidebar:
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "1️⃣ Datos", "2️⃣ Adstock", "3️⃣ Hill", "4️⃣ Rezagos/Difs", "5️⃣ Modelo"
 ])
+
+# ─────────────────────────────────────────────
+# SECCIÓN MODELO
+# ─────────────────────────────────────────────
+st.markdown('<div class="section-title">Modelado OLS – MMM</div>', unsafe_allow_html=True)
+
+# 🔹 Métricas placeholder (luego puedes conectarlas al modelo real)
+col1, col2, col3 = st.columns(3)
+
+if st.session_state.modelo is not None:
+    metricas = calcular_metricas(st.session_state.modelo)
+
+    col1.metric("R²", metricas["R²"])
+    col2.metric("Adj R²", metricas["Adj R²"])
+    col3.metric("MAPE", f'{metricas["MAPE"]}%')
+else:
+    col1.metric("R²", "—")
+    col2.metric("Adj R²", "—")
+    col3.metric("MAPE", "—")
+                
 
 # ══════════════════════════════════════════════
 #  TAB 1 – EXPLORACIÓN DE DATOS
