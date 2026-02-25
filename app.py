@@ -11,7 +11,7 @@ warnings.filterwarnings("ignore")
 # CONFIGURACIÓN GENERAL
 # ─────────────────────────────────────────────
 st.set_page_config(
-    page_title="MMM Studio",
+    page_title="AutoMMMate",
     layout="wide",
     page_icon="📊"
 )
