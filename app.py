@@ -52,6 +52,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+st.markdown('<div class="section-title">Modelado OLS – MMM</div>', unsafe_allow_html=True)
+
 # ─────────────────────────────────────────────
 #  FUNCIONES CORE
 # ─────────────────────────────────────────────
