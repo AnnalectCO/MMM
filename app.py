@@ -257,16 +257,25 @@ def plot_contrib(contri_dict, limites):
 
 
 # ─────────────────────────────────────────────
-#  SESSION STATE
+# SESSION STATE DEFAULTS (ÚNICO BLOQUE)
 # ─────────────────────────────────────────────
+
 defaults = dict(
-    df_raw=None, df_adstock=None, df_hill=None,
-    df_rezagos=None, modelo=None, contri=None,
-    adstock_params={}, hill_params={},
-    lag_params={}, diff_params={},
-    target_col=None, fecha_col=None,
-    x_cols=[],
+    df_raw=None,
+    df_adstock=None,
+    df_hill=None,
+    df_rezagos=None,
+    modelo=None,
+    contri=None,
+    adstock_params={},
+    hill_params={},
+    lag_params={},
+    diff_params={},
+    target_col=None,
+    fecha_col=None,
+    x_cols=[]
 )
+
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
