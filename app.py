@@ -641,9 +641,9 @@ with tab5:
             for c in inv_cols:
                 limites[c] = (7.0, 12.0)
             for c in comp_cols:
-                limites[c] = (5.0, 9.0)
+                limites[c] = (-9.0, -5.0)
             for c in otros_cols:
-                limites[c] = (0.0, 5.0)
+                limites[c] = (-5.0, 5.0)
 
         # ── Ajustar modelo manual ─────────────────────────────────────
         if st.button("▶ Ajustar Modelo OLS", type="primary", disabled=not x_cols):
