@@ -472,9 +472,13 @@ with tab3:
 # ══════════════════════════════════════════════
 with tab4:
     st.header("Rezagos y Diferencias")
-    base_df = (st.session_state.df_hill
-               or st.session_state.df_adstock
-               or st.session_state.df_raw)
+    if st.session_state.get("df_hill") is not None:
+        base_df = st.session_state.get("df_hill")
+    elif st.session_state.get("df_adstock") is not None:
+        base_df = st.session_state.get("df_adstock")
+    else:
+        base_df = st.session_state.get("df_raw")
+
     if base_df is None:
         st.info("Carga un dataset primero.")
     else:
@@ -544,10 +548,14 @@ with tab4:
 with tab5:
     st.header("Modelado OLS – MMM")
 
-    df_model_base = (st.session_state.df_rezagos
-                     or st.session_state.df_hill
-                     or st.session_state.df_adstock
-                     or st.session_state.df_raw)
+    if st.session_state.get("df_rezagos") is not None:
+        df_model_base = st.session_state.get("df_rezagos")
+    elif st.session_state.get("df_hill") is not None:
+        df_model_base = st.session_state.get("df_hill")
+    elif st.session_state.get("df_adstock") is not None:
+        df_model_base = st.session_state.get("df_adstock")
+    else:
+        df_model_base = st.session_state.get("df_raw")
 
     if df_model_base is None:
         st.info("Completa los pasos anteriores primero.")
