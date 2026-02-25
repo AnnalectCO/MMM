@@ -528,31 +528,93 @@ with tab4:
 # ══════════════════════════════════════════════
 with tab5:
     st.header("Modelado OLS – MMM")
+
     df_model_base = (st.session_state.df_rezagos
                      or st.session_state.df_hill
                      or st.session_state.df_adstock
                      or st.session_state.df_raw)
+
     if df_model_base is None:
         st.info("Completa los pasos anteriores primero.")
     else:
         df_m = df_model_base.copy()
-        all_cols = [c for c in df_m.columns if c != st.session_state.target_col]
 
-        st.markdown("### Variables predictoras")
-        x_cols = st.multiselect("Selecciona variables X", all_cols,
-                                default=st.session_state.x_cols if st.session_state.x_cols else [])
+        # Asegurar variables en session_state
+        if "x_cols" not in st.session_state:
+            st.session_state.x_cols = []
+
+        x_cols = st.session_state.x_cols
+
+        # ─────────────────────────────────────────
+        # AUTO MODELO BASE (si aún no existe)
+        # ─────────────────────────────────────────
+        if st.session_state.modelo is None and st.session_state.target_col:
+
+            num_cols = df_m.select_dtypes(include=np.number).columns.tolist()
+            auto_x = [c for c in num_cols if c != st.session_state.target_col]
+            auto_x = auto_x[:8]
+
+            if auto_x:
+                try:
+                    modelo_auto, contri_auto = ajustar_ols(
+                        df_m,
+                        st.session_state.target_col,
+                        auto_x
+                    )
+
+                    st.session_state.modelo = modelo_auto
+                    st.session_state.contri = contri_auto
+                    st.session_state.x_cols = auto_x
+                    x_cols = auto_x
+
+                    st.success("🤖 Modelo base generado automáticamente.")
+
+                except Exception as e:
+                    st.warning(f"No se pudo generar modelo automático: {e}")
+
+        # Botón para regenerar modelo automático
+        if st.button("🔄 Regenerar Modelo Automático"):
+            st.session_state.modelo = None
+            st.session_state.contri = None
+            st.rerun()
+
+        # ── Selector manual de variables ─────────────────────────────
+        st.markdown("### Variables del Modelo")
+        num_cols = df_m.select_dtypes(include=np.number).columns.tolist()
+        posibles_x = [c for c in num_cols if c != st.session_state.target_col]
+
+        x_cols = st.multiselect(
+            "Selecciona variables independientes",
+            posibles_x,
+            default=st.session_state.x_cols
+        )
 
         # ── Restricciones de contribución ──────────────────────────────
         st.markdown("### Restricciones de contribución (%)")
-        st.caption("Verde = dentro del rango | Rojo = fuera del rango. Configura los rangos esperados.")
+        st.caption("Verde = dentro del rango | Rojo = fuera del rango.")
+
         limites = {}
+
         with st.expander("Configurar rangos objetivo"):
-            inv_cols = st.multiselect("Variables de inversión propia (objetivo 7-12%)", x_cols,
-                                      key="inv_propia")
-            comp_cols = st.multiselect("Variables de competencia/IBOPE (objetivo 5-9%)", x_cols,
-                                       key="inv_comp")
-            otros_cols = st.multiselect("Variables promo/estacionalidad (<5%)", x_cols,
-                                        key="otros")
+
+            inv_cols = st.multiselect(
+                "Inversión propia (7–12%)",
+                x_cols,
+                key="inv_propia"
+            )
+
+            comp_cols = st.multiselect(
+                "Competencia / IBOPE (5–9%)",
+                x_cols,
+                key="inv_comp"
+            )
+
+            otros_cols = st.multiselect(
+                "Promo / Estacionalidad (<5%)",
+                x_cols,
+                key="otros"
+            )
+
             for c in inv_cols:
                 limites[c] = (7.0, 12.0)
             for c in comp_cols:
@@ -560,119 +622,134 @@ with tab5:
             for c in otros_cols:
                 limites[c] = (0.0, 5.0)
 
-        # ── Ajustar modelo ─────────────────────────────────────────────
+        # ── Ajustar modelo manual ─────────────────────────────────────
         if st.button("▶ Ajustar Modelo OLS", type="primary", disabled=not x_cols):
             try:
-                modelo, contri = ajustar_ols(df_m, st.session_state.target_col, x_cols)
-                st.session_state.modelo  = modelo
-                st.session_state.contri  = contri
-                st.session_state.x_cols  = x_cols
+                modelo, contri = ajustar_ols(
+                    df_m,
+                    st.session_state.target_col,
+                    x_cols
+                )
+
+                st.session_state.modelo = modelo
+                st.session_state.contri = contri
+                st.session_state.x_cols = x_cols
+
             except Exception as e:
                 st.error(f"Error al ajustar modelo: {e}")
 
-        # ── Resultados ─────────────────────────────────────────────────
+        # ── RESULTADOS ────────────────────────────────────────────────
         if st.session_state.modelo is not None:
+
             modelo = st.session_state.modelo
             contri = st.session_state.contri
 
+            # ── MÉTRICAS ──────────────────────────────────────────────
             metricas = calcular_metricas(modelo)
+
             st.markdown("### Métricas del Modelo")
-            cols_m = st.columns(len(metricas))
-            r2_ok  = metricas["R²"] >= 0.8
-            for i, (k, v) in enumerate(metricas.items()):
-                color = "normal"
-                if k == "R²":
-                    color = "off" if not r2_ok else "normal"
-                cols_m[i].metric(k, v)
-            if not r2_ok:
-                st.warning(f"⚠️ R² = {metricas['R²']} < 0.80. Considera agregar más variables o ajustar las transformaciones.")
+
+            col1, col2, col3 = st.columns(3)
+            col1.metric("R²", metricas["R²"])
+            col2.metric("Adj R²", metricas["Adj R²"])
+            col3.metric("MAPE", metricas["MAPE"])
+
+            if metricas["R²"] < 0.8:
+                st.warning("⚠️ R² bajo. Considera agregar variables o ajustar transformaciones.")
             else:
-                st.success(f"✅ R² = {metricas['R²']} ≥ 0.80")
+                st.success("✅ Buen nivel explicativo del modelo.")
 
-            # ── Contribuciones ────────────────────────────────────────
+            # ── CONTRIBUCIONES ───────────────────────────────────────
             st.markdown("### Contribuciones por Variable")
-            col_v, col_g = st.columns([1, 2])
-            with col_v:
-                df_c = pd.DataFrame({
-                    "Variable": list(contri.keys()),
-                    "Contribución (%)": [round(v, 2) for v in contri.values()]
-                }).sort_values("Contribución (%)", ascending=False)
-                # Semáforo
-                def semaforo(row):
-                    var = row["Variable"]; val = row["Contribución (%)"]
-                    lim = limites.get(var)
-                    if lim:
-                        return "🟢" if lim[0] <= val <= lim[1] else "🔴"
-                    return "⚪"
-                df_c["Estado"] = df_c.apply(semaforo, axis=1)
-                st.dataframe(df_c, use_container_width=True, hide_index=True)
 
-            with col_g:
-                fig_c = plot_contrib(contri, limites)
-                st.pyplot(fig_c)
+            df_c = pd.DataFrame({
+                "Variable": list(contri.keys()),
+                "Contribución (%)": [round(v, 2) for v in contri.values()]
+            }).sort_values("Contribución (%)", ascending=False)
 
-            # ── Resumen OLS ───────────────────────────────────────────
+            def semaforo(row):
+                var = row["Variable"]
+                val = row["Contribución (%)"]
+                lim = limites.get(var)
+                if lim:
+                    return "🟢" if lim[0] <= val <= lim[1] else "🔴"
+                return "⚪"
+
+            df_c["Estado"] = df_c.apply(semaforo, axis=1)
+
+            st.dataframe(df_c, use_container_width=True, hide_index=True)
+
+            fig_c = plot_contrib(contri, limites)
+            st.pyplot(fig_c)
+
+            # ── SUMMARY OLS ──────────────────────────────────────────
             with st.expander("📄 Summary OLS completo"):
                 st.text(modelo.summary().as_text())
 
-            # ── Coeficientes ──────────────────────────────────────────
+            # ── COEFICIENTES ─────────────────────────────────────────
             st.markdown("### Coeficientes")
+
             df_coef = pd.DataFrame({
                 "Variable": modelo.params.index,
                 "Coeficiente": modelo.params.values,
-                "Std Error": modelo.bse.values,
-                "t": modelo.tvalues.values,
                 "p-value": modelo.pvalues.values,
             })
-            df_coef["Sig."] = df_coef["p-value"].apply(
-                lambda p: "***" if p < 0.001 else ("**" if p < 0.01 else ("*" if p < 0.05 else ""))
+
+            st.dataframe(
+                df_coef.style.format({
+                    "Coeficiente": "{:.4f}",
+                    "p-value": "{:.4f}"
+                }),
+                use_container_width=True,
+                hide_index=True
             )
-            st.dataframe(df_coef.style.format({
-                "Coeficiente": "{:.4f}", "Std Error": "{:.4f}",
-                "t": "{:.3f}", "p-value": "{:.4f}"
-            }), use_container_width=True, hide_index=True)
 
-            # ── Gráfica Fit ───────────────────────────────────────────
+            # ── FIT ──────────────────────────────────────────────────
             st.markdown("### Ajuste del Modelo")
-            try:
-                fig_fit = plot_fit(df_m.loc[modelo.model.data.row_labels
-                                            if hasattr(modelo.model.data, "row_labels") else df_m.index],
-                                   modelo, st.session_state.target_col, st.session_state.fecha_col)
-                st.pyplot(fig_fit)
-            except Exception:
-                try:
-                    fig_fit = plot_fit(df_m, modelo, st.session_state.target_col, st.session_state.fecha_col)
-                    st.pyplot(fig_fit)
-                except Exception as e:
-                    st.warning(f"No se pudo graficar el fit: {e}")
 
-            # ── Diagnósticos ──────────────────────────────────────────
+            try:
+                fig_fit = plot_fit(
+                    df_m,
+                    modelo,
+                    st.session_state.target_col,
+                    st.session_state.fecha_col
+                )
+                st.pyplot(fig_fit)
+            except Exception as e:
+                st.warning(f"No se pudo graficar el fit: {e}")
+
+            # ── DIAGNÓSTICOS ─────────────────────────────────────────
             st.markdown("### Diagnósticos de Residuales")
+
             fig2, axes = plt.subplots(1, 3, figsize=(15, 4))
             resid = modelo.resid
 
-            axes[0].hist(resid, bins=25, color="#3b82f6", edgecolor="white", alpha=0.8)
+            axes[0].hist(resid, bins=25)
             axes[0].set_title("Distribución Residuales")
 
-            sm.qqplot(resid, line="s", ax=axes[1], alpha=0.6)
+            sm.qqplot(resid, line="s", ax=axes[1])
             axes[1].set_title("Q-Q Plot")
 
-            axes[2].scatter(modelo.fittedvalues, resid, alpha=0.5, color="#64748b", s=20)
-            axes[2].axhline(0, color="red", lw=1)
-            axes[2].set_xlabel("Fitted"); axes[2].set_ylabel("Residuales")
+            axes[2].scatter(modelo.fittedvalues, resid)
+            axes[2].axhline(0)
             axes[2].set_title("Residuales vs Ajustados")
 
-            for ax in axes:
-                ax.grid(True, linestyle="--", alpha=0.3)
             fig2.tight_layout()
             st.pyplot(fig2)
 
-            # ── Exportar resultados ───────────────────────────────────
+            # ── EXPORTAR ─────────────────────────────────────────────
             st.markdown("### Exportar")
-            csv_res = df_c.to_csv(index=False).encode("utf-8")
-            st.download_button("⬇️ Descargar contribuciones (.csv)", csv_res,
-                               "contribuciones_mmm.csv", "text/csv")
 
-            coef_csv = df_coef.to_csv(index=False).encode("utf-8")
-            st.download_button("⬇️ Descargar coeficientes (.csv)", coef_csv,
-                               "coeficientes_mmm.csv", "text/csv")
+            st.download_button(
+                "⬇️ Descargar contribuciones (.csv)",
+                df_c.to_csv(index=False).encode("utf-8"),
+                "contribuciones_mmm.csv",
+                "text/csv"
+            )
+
+            st.download_button(
+                "⬇️ Descargar coeficientes (.csv)",
+                df_coef.to_csv(index=False).encode("utf-8"),
+                "coeficientes_mmm.csv",
+                "text/csv"
+            )
