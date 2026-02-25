@@ -7,10 +7,71 @@ import matplotlib.ticker as mticker
 import warnings
 warnings.filterwarnings("ignore")
 
-st.set_page_config(page_title="MMM Studio", layout="wide", page_icon="📊")
+# ─────────────────────────────────────────────
+# CONFIGURACIÓN GENERAL
+# ─────────────────────────────────────────────
+st.set_page_config(
+    page_title="MMM Studio",
+    layout="wide",
+    page_icon="📊"
+)
 
 # ─────────────────────────────────────────────
-#  ESTILOS
+# ESTILOS GLOBALES (UI PREMIUM)
+# ─────────────────────────────────────────────
+st.markdown("""
+<style>
+
+/* Reduce espacio superior */
+.block-container {
+    padding-top: 0.5rem;
+}
+
+/* Tabs más compactos */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 6px;
+}
+
+/* Sidebar oscuro moderno */
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #0f172a, #111827);
+}
+
+[data-testid="stSidebar"] * {
+    color: #e5e7eb !important;
+}
+
+/* Títulos con gradiente */
+.section-title {
+    font-size: 1.6rem;
+    font-weight: 700;
+    margin-top: 1.5rem;
+    margin-bottom: 0.8rem;
+    background: linear-gradient(90deg, #2563eb, #06b6d4);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+/* Caja tipo métrica personalizada */
+.metric-box {
+    background: #1e293b;
+    border-radius: 12px;
+    padding: 14px;
+    border-left: 4px solid #2563eb;
+    margin-bottom: 8px;
+    color: white;
+}
+
+/* Ajustes generales */
+h1, h2, h3 {
+    font-weight: 600;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────
+# HERO HEADER PRINCIPAL
 # ─────────────────────────────────────────────
 st.markdown("""
 <div style="
@@ -38,22 +99,22 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-st.markdown("""
-<style>
-.section-title {
-    font-size: 1.6rem;
-    font-weight: 700;
-    margin-top: 1.5rem;
-    margin-bottom: 0.8rem;
-    background: linear-gradient(90deg, #2563eb, #06b6d4);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-}
-</style>
-""", unsafe_allow_html=True)
-
+# ─────────────────────────────────────────────
+# SECCIÓN MODELO
+# ─────────────────────────────────────────────
 st.markdown('<div class="section-title">Modelado OLS – MMM</div>', unsafe_allow_html=True)
 
+# 🔹 Métricas placeholder (luego puedes conectarlas al modelo real)
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.metric("R²", "—")
+
+with col2:
+    st.metric("Adj R²", "—")
+
+with col3:
+    st.metric("MAPE", "—")
 # ─────────────────────────────────────────────
 #  FUNCIONES CORE
 # ─────────────────────────────────────────────
