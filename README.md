@@ -1,6 +1,10 @@
 # 📊 MMM Studio – Marketing Mix Modeling en Streamlit
 
-Aplicación interactiva para construir modelos de **Marketing Mix Modeling (MMM)** a partir de cualquier dataset tabular, usando transformaciones Adstock v3, Hill y regresión OLS.
+[Running in... ](https://mixmedia.streamlit.app/)
+> Aplicación interactiva para construir modelos de **Marketing Mix Modeling (MMM)** a partir de cualquier dataset tabular, usando transformaciones Adstock v3, Hill y regresión OLS.
+![Python](https://img.shields.io/badge/Python-3.10+-blue)
+![Streamlit](https://img.shields.io/badge/Streamlit-1.32+-red)
+![Claude](https://img.shields.io/badge/Anthropic-Claude%20AI-purple)
 
 ---
 
