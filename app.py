@@ -444,8 +444,8 @@ with tab3:
                     media_val = float(df[col].mean()) if df[col].mean() != 0 else 1.0
                     rho   = st.number_input(f"rho ({col})", value=prev.get("rho", round(media_val, 2)), format="%.2f", key=f"hr_{col}")
                     p_v   = st.slider(f"p ({col})", 0.1, 5.0, prev.get("p", 1.0), 0.1, key=f"hp_{col}")
-                    #beta  = st.slider(f"beta ({col})", 0.1, 10.0, prev.get("beta", 1.0), 0.1, key=f"hb_{col}")
-                    #alpha = st.number_input(f"alpha ({col})", value=prev.get("alpha", 0.0), format="%.4f", key=f"ha_{col}")
+                    beta  = st.slider(f"beta ({col})", 0.1, 10.0, prev.get("beta", 1.0), 0.1, key=f"hb_{col}")
+                    alpha = st.number_input(f"alpha ({col})", value=prev.get("alpha", 0.0), format="%.4f", key=f"ha_{col}")
                     hill_params[col] = {"rho": rho, "p": p_v, "beta": beta, "alpha": alpha}
 
             if st.button("▶ Aplicar Hill", type="primary"):
