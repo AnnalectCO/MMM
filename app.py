@@ -4,6 +4,7 @@ import numpy as np
 import statsmodels.api as sm
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
+from scipy.stats import spearmanr
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -254,6 +255,173 @@ def plot_contrib(contri_dict, limites):
     ax.grid(axis="x", linestyle="--", alpha=0.3)
     fig.tight_layout()
     return fig
+
+
+# ─────────────────────────────────────────────
+#  FUNCIÓN: RECOMENDADOR AUTOMÁTICO DE TRANSFORMACIONES
+# ─────────────────────────────────────────────
+
+def recomendar_transformaciones(df_raw, df_actual, target_col, fecha_col, adstock_params, hill_params, lag_params, diff_params):
+    """
+    Analiza cada variable numérica y recomienda si aplica o no:
+    - Adstock (correlación cruzada con rezago > correlación contemporánea)
+    - Hill    (relación no lineal: correlación de rangos >> correlación lineal)
+    - Lag     (la correlación mejora con rezago N)
+    - Diff    (serie no estacionaria: CV > umbral, tendencia clara)
+
+    Devuelve una lista de dicts con columnas: variable, adstock, hill, lag, diff, notas
+    y marca si la transformación ya fue aplicada por el usuario.
+    """
+    if df_raw is None or target_col is None:
+        return []
+
+    recomendaciones = []
+    num_cols = [c for c in df_raw.select_dtypes(include=np.number).columns
+                if c != target_col and c != fecha_col]
+    y = df_raw[target_col].dropna().values
+
+    for col in num_cols:
+        x_raw = df_raw[col].dropna().values
+        n = min(len(x_raw), len(y))
+        if n < 8:
+            continue
+        x = x_raw[-n:]
+        yy = y[-n:]
+
+        rec = {"variable": col, "adstock": False, "hill": False, "lag": 0, "diff": False, "notas": []}
+
+        # ── Ya aplicadas por el usuario ──────────────────────────────
+        ya_adstock = col in adstock_params
+        ya_hill    = col in hill_params
+        ya_lag     = col in lag_params
+        ya_diff    = col in diff_params
+
+        # ── 1. ADSTOCK: correlación cruzada ──────────────────────────
+        try:
+            corr_0 = abs(np.corrcoef(x, yy)[0, 1]) if np.std(x) > 0 and np.std(yy) > 0 else 0
+            mejor_lag_corr = corr_0
+            mejor_lag_k    = 0
+            for k in range(1, min(6, n - 2)):
+                xk = x[:-k]; yk = yy[k:]
+                mk = min(len(xk), len(yk))
+                if mk < 5: break
+                c_k = abs(np.corrcoef(xk[:mk], yk[:mk])[0, 1]) if np.std(xk[:mk]) > 0 else 0
+                if c_k > mejor_lag_corr + 0.05:
+                    mejor_lag_corr = c_k
+                    mejor_lag_k    = k
+            # Adstock recomendado si hay efecto rezagado notable
+            if mejor_lag_k >= 1 and mejor_lag_corr > corr_0 + 0.04:
+                rec["adstock"] = True
+                rec["notas"].append(f"Efecto retardado (lag {mejor_lag_k} mejora corr {corr_0:.2f}→{mejor_lag_corr:.2f})")
+            elif ya_adstock:
+                rec["adstock"] = True
+                rec["notas"].append("Adstock ya aplicado por usuario")
+        except Exception:
+            pass
+
+        # ── 2. HILL: no linealidad ────────────────────────────────────
+        try:
+            if np.std(x) > 0 and np.std(yy) > 0:
+                corr_lin  = abs(np.corrcoef(x, yy)[0, 1])
+                corr_rank, _ = spearmanr(x, yy)
+                corr_rank = abs(corr_rank)
+                # Si la correlación de rangos supera a la lineal: no linealidad
+                if corr_rank > corr_lin + 0.08 and corr_rank > 0.25:
+                    rec["hill"] = True
+                    rec["notas"].append(f"No linealidad (Spearman {corr_rank:.2f} > Pearson {corr_lin:.2f})")
+                elif ya_hill:
+                    rec["hill"] = True
+                    rec["notas"].append("Hill ya aplicado por usuario")
+        except Exception:
+            pass
+
+        # ── 3. LAG óptimo ─────────────────────────────────────────────
+        try:
+            corr_0 = abs(np.corrcoef(x, yy)[0, 1]) if np.std(x) > 0 and np.std(yy) > 0 else 0
+            mejor_lag_v  = corr_0
+            mejor_lag_n  = 0
+            for k in range(1, min(5, n - 2)):
+                xk = x[:-k]; yk = yy[k:]
+                mk = min(len(xk), len(yk))
+                if mk < 5: break
+                c_k = abs(np.corrcoef(xk[:mk], yk[:mk])[0, 1]) if np.std(xk[:mk]) > 0 else 0
+                if c_k > mejor_lag_v + 0.06:
+                    mejor_lag_v = c_k
+                    mejor_lag_n = k
+            if mejor_lag_n >= 1:
+                rec["lag"] = mejor_lag_n
+                rec["notas"].append(f"Lag recomendado: {mejor_lag_n} período(s) (corr {corr_0:.2f}→{mejor_lag_v:.2f})")
+            elif ya_lag:
+                rec["lag"] = lag_params[col]
+                rec["notas"].append(f"Lag {lag_params[col]} ya aplicado por usuario")
+        except Exception:
+            pass
+
+        # ── 4. DIFF: tendencia / no estacionariedad ───────────────────
+        try:
+            if len(x) > 10 and np.mean(x) != 0:
+                cv = np.std(x) / abs(np.mean(x))
+                # Tendencia lineal simple
+                t = np.arange(len(x))
+                slope = np.polyfit(t, x, 1)[0]
+                trend_ratio = abs(slope * len(x)) / (np.mean(np.abs(x)) + 1e-9)
+                if trend_ratio > 0.4:
+                    rec["diff"] = True
+                    rec["notas"].append(f"Tendencia detectada (ratio {trend_ratio:.2f}) → diferenciación recomendada")
+                elif ya_diff:
+                    rec["diff"] = True
+                    rec["notas"].append("Diferenciación ya aplicada por usuario")
+        except Exception:
+            pass
+
+        # ── Resumen del estado ────────────────────────────────────────
+        aplicadas = []
+        if ya_adstock: aplicadas.append("✅ Adstock")
+        if ya_hill:    aplicadas.append("✅ Hill")
+        if ya_lag:     aplicadas.append(f"✅ Lag{lag_params[col]}")
+        if ya_diff:    aplicadas.append("✅ Diff")
+
+        # Solo incluir variables con al menos una recomendación o ya transformadas
+        if any([rec["adstock"], rec["hill"], rec["lag"] > 0, rec["diff"]]) or aplicadas:
+            rec["ya_aplicadas"] = ", ".join(aplicadas) if aplicadas else "—"
+            recomendaciones.append(rec)
+
+    return recomendaciones
+
+
+def render_recomendaciones(recomendaciones):
+    """Renderiza la tabla de recomendaciones con íconos."""
+    if not recomendaciones:
+        st.info("No hay recomendaciones disponibles. Asegúrate de haber cargado los datos y definir la variable objetivo.")
+        return
+
+    filas = []
+    for r in recomendaciones:
+        filas.append({
+            "Variable":      r["variable"],
+            "Adstock":       "🟡 Recomendar" if r["adstock"] else "⚪",
+            "Hill":          "🟡 Recomendar" if r["hill"]    else "⚪",
+            "Lag óptimo":    f"🟡 lag{r['lag']}" if r["lag"] > 0 else "⚪",
+            "Diferencia":    "🟡 Recomendar" if r["diff"]    else "⚪",
+            "Ya aplicadas":  r.get("ya_aplicadas", "—"),
+            "Notas":         " | ".join(r["notas"]) if r["notas"] else "—",
+        })
+
+    df_rec = pd.DataFrame(filas)
+    st.dataframe(df_rec, use_container_width=True, hide_index=True)
+
+    # Alerta si hay recomendaciones pendientes
+    pendientes = [r for r in recomendaciones
+                  if (r["adstock"] and r["variable"] not in (st.session_state.adstock_params or {}))
+                  or (r["hill"]    and r["variable"] not in (st.session_state.hill_params    or {}))
+                  or (r["lag"] > 0 and r["variable"] not in (st.session_state.lag_params     or {}))
+                  or (r["diff"]    and r["variable"] not in (st.session_state.diff_params    or {}))]
+
+    if pendientes:
+        vars_pend = ", ".join([p["variable"] for p in pendientes])
+        st.warning(f"⚠️ **{len(pendientes)} variable(s) con transformaciones recomendadas aún no aplicadas:** {vars_pend}")
+    else:
+        st.success("✅ Todas las transformaciones recomendadas han sido aplicadas.")
 
 
 # ─────────────────────────────────────────────
@@ -603,6 +771,38 @@ with tab5:
             st.session_state.modelo = None
             st.session_state.contri = None
             st.rerun()
+
+        # ══════════════════════════════════════════════════════════════
+        # 🤖 RECOMENDADOR AUTOMÁTICO DE TRANSFORMACIONES
+        # ══════════════════════════════════════════════════════════════
+        with st.expander("🤖 Recomendador Automático de Transformaciones", expanded=True):
+            st.caption(
+                "Análisis estadístico de cada variable: correlación cruzada (Adstock), "
+                "no linealidad (Hill), lag óptimo y tendencia (Diff). "
+                "🟡 = recomendado | ✅ = ya aplicado | ⚪ = no necesario"
+            )
+
+            if st.button("🔍 Analizar variables y generar recomendaciones", key="btn_rec"):
+                with st.spinner("Analizando transformaciones óptimas..."):
+                    recs = recomendar_transformaciones(
+                        df_raw         = st.session_state.get("df_raw"),
+                        df_actual      = df_m,
+                        target_col     = st.session_state.target_col,
+                        fecha_col      = st.session_state.fecha_col,
+                        adstock_params = st.session_state.get("adstock_params", {}),
+                        hill_params    = st.session_state.get("hill_params",    {}),
+                        lag_params     = st.session_state.get("lag_params",     {}),
+                        diff_params    = st.session_state.get("diff_params",    {}),
+                    )
+                    st.session_state["_recomendaciones"] = recs
+
+            if st.session_state.get("_recomendaciones"):
+                render_recomendaciones(st.session_state["_recomendaciones"])
+                st.caption(
+                    "💡 **Cómo usarlo:** Si una variable muestra 🟡, regresa a la pestaña "
+                    "correspondiente (Adstock / Hill / Rezagos) y aplica la transformación. "
+                    "Vuelve a analizar para confirmar que quedó como ✅."
+                )
 
         # ── Selector manual de variables ─────────────────────────────
         st.markdown("### Variables del Modelo")
