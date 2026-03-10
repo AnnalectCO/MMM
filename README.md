@@ -157,6 +157,8 @@ Para personalizar colores, rango de fechas por defecto, o agregar más transform
 
 ---
 
+<img width="409" height="246" alt="image" src="https://github.com/user-attachments/assets/db0fa8a4-77f2-46e7-9113-39d48c2744af" />
+
 ## 📄 Licencia
 
 MIT – libre uso y modificación.
