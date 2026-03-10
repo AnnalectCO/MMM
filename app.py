@@ -509,8 +509,9 @@ with tab4:
             cols_suma = st.multiselect("Columnas a sumar", num_cols)
             if st.button("Crear columna") and cols_suma:
                 df[new_col_name] = df[cols_suma].sum(axis=1)
+                # guardar dataframe actualizado
+                st.session_state.df_custom = df
                 st.success(f"Columna '{new_col_name}' creada.")
-
         # Filtro de fechas
         st.markdown("#### Filtro de fechas")
         col_f = st.session_state.fecha_col
