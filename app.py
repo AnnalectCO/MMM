@@ -472,7 +472,9 @@ with tab3:
 # ══════════════════════════════════════════════
 with tab4:
     st.header("Rezagos y Diferencias")
-    if st.session_state.get("df_hill") is not None:
+    if st.session_state.get("df_custom") is not None:
+        base_df = st.session_state.get("df_custom")
+    elif st.session_state.get("df_hill") is not None:
         base_df = st.session_state.get("df_hill")
     elif st.session_state.get("df_adstock") is not None:
         base_df = st.session_state.get("df_adstock")
