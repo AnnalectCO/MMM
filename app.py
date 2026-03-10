@@ -4,7 +4,6 @@ import numpy as np
 import statsmodels.api as sm
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
-from scipy.stats import spearmanr
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -258,170 +257,205 @@ def plot_contrib(contri_dict, limites):
 
 
 # ─────────────────────────────────────────────
-#  FUNCIÓN: RECOMENDADOR AUTOMÁTICO DE TRANSFORMACIONES
+# MOTOR DE OPTIMIZACIÓN DE TRANSFORMACIONES
 # ─────────────────────────────────────────────
 
-def recomendar_transformaciones(df_raw, df_actual, target_col, fecha_col, adstock_params, hill_params, lag_params, diff_params):
+def _score_contribucion(contri, limites, r2, r2_base, penaliza_r2=0.02):
     """
-    Analiza cada variable numérica y recomienda si aplica o no:
-    - Adstock (correlación cruzada con rezago > correlación contemporánea)
-    - Hill    (relación no lineal: correlación de rangos >> correlación lineal)
-    - Lag     (la correlación mejora con rezago N)
-    - Diff    (serie no estacionaria: CV > umbral, tendencia clara)
+    Score compuesto:
+      - Suma de distancias de cada variable con límite al rango objetivo (penaliza fuera)
+      - Penalización si R² cae más de `penaliza_r2` respecto al base
+    Menor score = mejor.
+    """
+    score = 0.0
+    for var, (lo, hi) in limites.items():
+        val = contri.get(var, 0.0)
+        if val < lo:
+            score += (lo - val) ** 2
+        elif val > hi:
+            score += (val - hi) ** 2
+        # dentro del rango: 0
+    # Penalizar caída de R²
+    caida = max(0.0, r2_base - r2)
+    score += (caida / penaliza_r2) * 10  # peso alto para no sacrificar R²
+    return score
 
-    Devuelve una lista de dicts con columnas: variable, adstock, hill, lag, diff, notas
-    y marca si la transformación ya fue aplicada por el usuario.
+
+def _aplicar_combo(df_raw, col, combo, n_obs):
     """
-    if df_raw is None or target_col is None:
+    Aplica una combinación de transformaciones (adstock → hill → lag → diff)
+    sobre `col` en df_raw y devuelve la serie transformada alineada a n_obs filas.
+    `combo` es un dict con claves opcionales:
+        adstock: {fdecayRate, peak, length}
+        hill:    {rho, p, beta, alpha}
+        lag:     int
+        diff:    int (orden)
+    Devuelve pd.Series o None si falla.
+    """
+    try:
+        serie = df_raw[col].copy()
+
+        if "adstock" in combo:
+            serie = adstockv3_v1(serie, **combo["adstock"])
+
+        if "hill" in combo:
+            serie = pd.Series(hill(serie, **combo["hill"]), index=serie.index)
+
+        if "lag" in combo and combo["lag"] > 0:
+            serie = serie.shift(combo["lag"])
+
+        if "diff" in combo and combo["diff"] > 0:
+            serie = serie.diff(combo["diff"])
+
+        return serie
+    except Exception:
+        return None
+
+
+def optimizar_transformaciones(df_raw, df_modelo, target_col, fecha_col,
+                                x_cols, limites, r2_base,
+                                max_iter_por_var=30):
+    """
+    Para cada variable en x_cols que tenga límites definidos:
+      1. Genera una grilla de combinaciones (adstock params + hill params + lag + diff)
+      2. Por cada combo, construye un nuevo df, ajusta OLS, calcula score
+      3. Devuelve la mejor transformación encontrada para cada variable
+
+    Retorna lista de dicts con:
+      variable, mejor_combo, r2_nuevo, contri_nueva, score, mejora_desc
+    """
+    if df_raw is None or not x_cols or not limites:
         return []
 
-    recomendaciones = []
-    num_cols = [c for c in df_raw.select_dtypes(include=np.number).columns
-                if c != target_col and c != fecha_col]
-    y = df_raw[target_col].dropna().values
+    resultados = []
 
-    for col in num_cols:
-        x_raw = df_raw[col].dropna().values
-        n = min(len(x_raw), len(y))
-        if n < 8:
+    # Modelo de referencia (sin cambios)
+    try:
+        _, contri_base = ajustar_ols(df_modelo, target_col, x_cols)
+    except Exception:
+        return []
+
+    # Grilla de parámetros a explorar
+    decays  = [0.2, 0.4, 0.6, 0.8]
+    peaks   = [1, 2]
+    lengths = [26, 52, 82]
+    rho_pcts= [0.25, 0.5, 0.75]  # fracción de la media como rho
+    lags    = [0, 1, 2, 3]
+
+    for var in x_cols:
+        if var not in limites:
+            continue   # solo variables con restricción definida
+        if var not in df_raw.columns:
             continue
-        x = x_raw[-n:]
-        yy = y[-n:]
 
-        rec = {"variable": col, "adstock": False, "hill": False, "lag": 0, "diff": False, "notas": []}
+        lo, hi = limites[var]
+        contri_actual = contri_base.get(var, 0.0)
 
-        # ── Ya aplicadas por el usuario ──────────────────────────────
-        ya_adstock = col in adstock_params
-        ya_hill    = col in hill_params
-        ya_lag     = col in lag_params
-        ya_diff    = col in diff_params
+        # Si ya está dentro del rango, no hace falta optimizar
+        if lo <= contri_actual <= hi:
+            resultados.append({
+                "variable": var,
+                "estado": "✅ Ya en rango",
+                "contri_actual": round(contri_actual, 2),
+                "contri_nueva": round(contri_actual, 2),
+                "r2_nuevo": round(r2_base, 4),
+                "mejor_combo": {},
+                "mejora_desc": "Sin cambios necesarios",
+            })
+            continue
 
-        # ── 1. ADSTOCK: correlación cruzada ──────────────────────────
-        try:
-            corr_0 = abs(np.corrcoef(x, yy)[0, 1]) if np.std(x) > 0 and np.std(yy) > 0 else 0
-            mejor_lag_corr = corr_0
-            mejor_lag_k    = 0
-            for k in range(1, min(6, n - 2)):
-                xk = x[:-k]; yk = yy[k:]
-                mk = min(len(xk), len(yk))
-                if mk < 5: break
-                c_k = abs(np.corrcoef(xk[:mk], yk[:mk])[0, 1]) if np.std(xk[:mk]) > 0 else 0
-                if c_k > mejor_lag_corr + 0.05:
-                    mejor_lag_corr = c_k
-                    mejor_lag_k    = k
-            # Adstock recomendado si hay efecto rezagado notable
-            if mejor_lag_k >= 1 and mejor_lag_corr > corr_0 + 0.04:
-                rec["adstock"] = True
-                rec["notas"].append(f"Efecto retardado (lag {mejor_lag_k} mejora corr {corr_0:.2f}→{mejor_lag_corr:.2f})")
-            elif ya_adstock:
-                rec["adstock"] = True
-                rec["notas"].append("Adstock ya aplicado por usuario")
-        except Exception:
-            pass
+        col = var
+        media_var = float(df_raw[col].mean()) if df_raw[col].mean() != 0 else 1.0
 
-        # ── 2. HILL: no linealidad ────────────────────────────────────
-        try:
-            if np.std(x) > 0 and np.std(yy) > 0:
-                corr_lin  = abs(np.corrcoef(x, yy)[0, 1])
-                corr_rank, _ = spearmanr(x, yy)
-                corr_rank = abs(corr_rank)
-                # Si la correlación de rangos supera a la lineal: no linealidad
-                if corr_rank > corr_lin + 0.08 and corr_rank > 0.25:
-                    rec["hill"] = True
-                    rec["notas"].append(f"No linealidad (Spearman {corr_rank:.2f} > Pearson {corr_lin:.2f})")
-                elif ya_hill:
-                    rec["hill"] = True
-                    rec["notas"].append("Hill ya aplicado por usuario")
-        except Exception:
-            pass
+        mejor_score = _score_contribucion(contri_base, limites, r2_base, r2_base)
+        mejor_combo = {}
+        mejor_r2    = r2_base
+        mejor_contri= contri_base.copy()
 
-        # ── 3. LAG óptimo ─────────────────────────────────────────────
-        try:
-            corr_0 = abs(np.corrcoef(x, yy)[0, 1]) if np.std(x) > 0 and np.std(yy) > 0 else 0
-            mejor_lag_v  = corr_0
-            mejor_lag_n  = 0
-            for k in range(1, min(5, n - 2)):
-                xk = x[:-k]; yk = yy[k:]
-                mk = min(len(xk), len(yk))
-                if mk < 5: break
-                c_k = abs(np.corrcoef(xk[:mk], yk[:mk])[0, 1]) if np.std(xk[:mk]) > 0 else 0
-                if c_k > mejor_lag_v + 0.06:
-                    mejor_lag_v = c_k
-                    mejor_lag_n = k
-            if mejor_lag_n >= 1:
-                rec["lag"] = mejor_lag_n
-                rec["notas"].append(f"Lag recomendado: {mejor_lag_n} período(s) (corr {corr_0:.2f}→{mejor_lag_v:.2f})")
-            elif ya_lag:
-                rec["lag"] = lag_params[col]
-                rec["notas"].append(f"Lag {lag_params[col]} ya aplicado por usuario")
-        except Exception:
-            pass
+        intentos = 0
+        for decay in decays:
+            for peak in peaks:
+                for length in lengths:
+                    for rho_f in rho_pcts:
+                        for lag in lags:
+                            if intentos >= max_iter_por_var:
+                                break
+                            intentos += 1
 
-        # ── 4. DIFF: tendencia / no estacionariedad ───────────────────
-        try:
-            if len(x) > 10 and np.mean(x) != 0:
-                cv = np.std(x) / abs(np.mean(x))
-                # Tendencia lineal simple
-                t = np.arange(len(x))
-                slope = np.polyfit(t, x, 1)[0]
-                trend_ratio = abs(slope * len(x)) / (np.mean(np.abs(x)) + 1e-9)
-                if trend_ratio > 0.4:
-                    rec["diff"] = True
-                    rec["notas"].append(f"Tendencia detectada (ratio {trend_ratio:.2f}) → diferenciación recomendada")
-                elif ya_diff:
-                    rec["diff"] = True
-                    rec["notas"].append("Diferenciación ya aplicada por usuario")
-        except Exception:
-            pass
+                            combo = {
+                                "adstock": {"fdecayRate": decay, "peak": peak, "length": length},
+                                "hill":    {"rho": media_var * rho_f, "p": 1, "beta": 1, "alpha": 0},
+                            }
+                            if lag > 0:
+                                combo["lag"] = lag
 
-        # ── Resumen del estado ────────────────────────────────────────
-        aplicadas = []
-        if ya_adstock: aplicadas.append("✅ Adstock")
-        if ya_hill:    aplicadas.append("✅ Hill")
-        if ya_lag:     aplicadas.append(f"✅ Lag{lag_params[col]}")
-        if ya_diff:    aplicadas.append("✅ Diff")
+                            # Construir df con esta transformación aplicada
+                            nueva_serie = _aplicar_combo(df_raw, var, combo, len(df_modelo))
+                            if nueva_serie is None:
+                                continue
 
-        # Solo incluir variables con al menos una recomendación o ya transformadas
-        if any([rec["adstock"], rec["hill"], rec["lag"] > 0, rec["diff"]]) or aplicadas:
-            rec["ya_aplicadas"] = ", ".join(aplicadas) if aplicadas else "—"
-            recomendaciones.append(rec)
+                            df_test = df_modelo.copy()
+                            df_test[var] = nueva_serie.values if len(nueva_serie) == len(df_test) else None
+                            if df_test[var].isnull().all():
+                                continue
 
-    return recomendaciones
+                            try:
+                                m_test, c_test = ajustar_ols(df_test, target_col, x_cols)
+                                r2_test = m_test.rsquared
+                            except Exception:
+                                continue
 
+                            # No aceptar si R² cae más de 2pp
+                            if r2_test < r2_base - 0.02:
+                                continue
 
-def render_recomendaciones(recomendaciones):
-    """Renderiza la tabla de recomendaciones con íconos."""
-    if not recomendaciones:
-        st.info("No hay recomendaciones disponibles. Asegúrate de haber cargado los datos y definir la variable objetivo.")
-        return
+                            score = _score_contribucion(c_test, limites, r2_test, r2_base)
+                            if score < mejor_score:
+                                mejor_score  = score
+                                mejor_combo  = combo
+                                mejor_r2     = r2_test
+                                mejor_contri = c_test
 
-    filas = []
-    for r in recomendaciones:
-        filas.append({
-            "Variable":      r["variable"],
-            "Adstock":       "🟡 Recomendar" if r["adstock"] else "⚪",
-            "Hill":          "🟡 Recomendar" if r["hill"]    else "⚪",
-            "Lag óptimo":    f"🟡 lag{r['lag']}" if r["lag"] > 0 else "⚪",
-            "Diferencia":    "🟡 Recomendar" if r["diff"]    else "⚪",
-            "Ya aplicadas":  r.get("ya_aplicadas", "—"),
-            "Notas":         " | ".join(r["notas"]) if r["notas"] else "—",
+                        if intentos >= max_iter_por_var:
+                            break
+                    if intentos >= max_iter_por_var:
+                        break
+                if intentos >= max_iter_por_var:
+                    break
+
+        contri_nueva_var = mejor_contri.get(var, contri_actual)
+        en_rango = lo <= contri_nueva_var <= hi
+
+        if mejor_combo:
+            ad = mejor_combo.get("adstock", {})
+            hl = mejor_combo.get("hill", {})
+            lag_v = mejor_combo.get("lag", 0)
+            partes = []
+            if ad:
+                partes.append(f"Adstock(decay={ad['fdecayRate']}, peak={ad['peak']}, len={ad['length']})")
+            if hl:
+                partes.append(f"Hill(rho={hl['rho']:.0f})")
+            if lag_v:
+                partes.append(f"Lag={lag_v}")
+            desc = " + ".join(partes) if partes else "Sin transformación"
+        else:
+            desc = "Sin mejora encontrada"
+
+        estado = "✅ Mejora al rango" if en_rango else ("🟡 Mejora parcial" if contri_nueva_var > contri_actual and contri_actual < lo else "🔴 Sin solución óptima")
+
+        resultados.append({
+            "variable":      var,
+            "estado":        estado,
+            "contri_actual": round(contri_actual, 2),
+            "contri_nueva":  round(contri_nueva_var, 2),
+            "rango":         f"{lo}% – {hi}%",
+            "r2_base":       round(r2_base, 4),
+            "r2_nuevo":      round(mejor_r2, 4),
+            "mejor_combo":   mejor_combo,
+            "mejora_desc":   desc,
         })
 
-    df_rec = pd.DataFrame(filas)
-    st.dataframe(df_rec, use_container_width=True, hide_index=True)
-
-    # Alerta si hay recomendaciones pendientes
-    pendientes = [r for r in recomendaciones
-                  if (r["adstock"] and r["variable"] not in (st.session_state.adstock_params or {}))
-                  or (r["hill"]    and r["variable"] not in (st.session_state.hill_params    or {}))
-                  or (r["lag"] > 0 and r["variable"] not in (st.session_state.lag_params     or {}))
-                  or (r["diff"]    and r["variable"] not in (st.session_state.diff_params    or {}))]
-
-    if pendientes:
-        vars_pend = ", ".join([p["variable"] for p in pendientes])
-        st.warning(f"⚠️ **{len(pendientes)} variable(s) con transformaciones recomendadas aún no aplicadas:** {vars_pend}")
-    else:
-        st.success("✅ Todas las transformaciones recomendadas han sido aplicadas.")
+    return resultados
 
 
 # ─────────────────────────────────────────────
@@ -772,38 +806,6 @@ with tab5:
             st.session_state.contri = None
             st.rerun()
 
-        # ══════════════════════════════════════════════════════════════
-        # 🤖 RECOMENDADOR AUTOMÁTICO DE TRANSFORMACIONES
-        # ══════════════════════════════════════════════════════════════
-        with st.expander("🤖 Recomendador Automático de Transformaciones", expanded=True):
-            st.caption(
-                "Análisis estadístico de cada variable: correlación cruzada (Adstock), "
-                "no linealidad (Hill), lag óptimo y tendencia (Diff). "
-                "🟡 = recomendado | ✅ = ya aplicado | ⚪ = no necesario"
-            )
-
-            if st.button("🔍 Analizar variables y generar recomendaciones", key="btn_rec"):
-                with st.spinner("Analizando transformaciones óptimas..."):
-                    recs = recomendar_transformaciones(
-                        df_raw         = st.session_state.get("df_raw"),
-                        df_actual      = df_m,
-                        target_col     = st.session_state.target_col,
-                        fecha_col      = st.session_state.fecha_col,
-                        adstock_params = st.session_state.get("adstock_params", {}),
-                        hill_params    = st.session_state.get("hill_params",    {}),
-                        lag_params     = st.session_state.get("lag_params",     {}),
-                        diff_params    = st.session_state.get("diff_params",    {}),
-                    )
-                    st.session_state["_recomendaciones"] = recs
-
-            if st.session_state.get("_recomendaciones"):
-                render_recomendaciones(st.session_state["_recomendaciones"])
-                st.caption(
-                    "💡 **Cómo usarlo:** Si una variable muestra 🟡, regresa a la pestaña "
-                    "correspondiente (Adstock / Hill / Rezagos) y aplica la transformación. "
-                    "Vuelve a analizar para confirmar que quedó como ✅."
-                )
-
         # ── Selector manual de variables ─────────────────────────────
         st.markdown("### Variables del Modelo")
         num_cols = df_m.select_dtypes(include=np.number).columns.tolist()
@@ -962,6 +964,106 @@ with tab5:
 
             fig2.tight_layout()
             st.pyplot(fig2)
+
+            # ── OPTIMIZADOR DE TRANSFORMACIONES ──────────────────────
+            st.markdown("### 🔬 Recomendador de Transformaciones")
+            st.caption(
+                "Busca automáticamente la combinación de Adstock + Hill + Lag que acerca "
+                "la contribución de cada variable a su rango objetivo, **sin sacrificar R²**. "
+                "Solo se consideran variables con rango definido en la sección anterior."
+            )
+
+            vars_con_limite = list(limites.keys()) if limites else []
+
+            if not vars_con_limite:
+                st.info("⬆️ Define primero los rangos objetivo en **Restricciones de contribución** para al menos una variable.")
+            else:
+                col_opt1, col_opt2 = st.columns([2, 1])
+                with col_opt1:
+                    max_iter = st.slider(
+                        "Iteraciones por variable (más = más preciso, más lento)",
+                        min_value=10, max_value=60, value=30, step=10,
+                        key="opt_iter"
+                    )
+                with col_opt2:
+                    st.metric("Variables a optimizar", len(vars_con_limite))
+                    st.caption(f"Variables: {', '.join(vars_con_limite)}")
+
+                if st.button("🚀 Buscar mejores transformaciones", type="primary", key="btn_optimizar"):
+                    r2_actual = modelo.rsquared
+                    df_raw_opt = st.session_state.get("df_raw")
+
+                    if df_raw_opt is None:
+                        st.error("Se necesita el dataset original (sin transformar) para explorar las combinaciones.")
+                    else:
+                        with st.spinner(f"Explorando combinaciones para {len(vars_con_limite)} variable(s)… Esto puede tomar unos segundos."):
+                            resultados_opt = optimizar_transformaciones(
+                                df_raw    = df_raw_opt,
+                                df_modelo = df_m,
+                                target_col= st.session_state.target_col,
+                                fecha_col = st.session_state.fecha_col,
+                                x_cols    = st.session_state.x_cols,
+                                limites   = limites,
+                                r2_base   = r2_actual,
+                                max_iter_por_var = max_iter,
+                            )
+                        st.session_state["_opt_resultados"] = resultados_opt
+
+                # Mostrar resultados del optimizador
+                if st.session_state.get("_opt_resultados"):
+                    ropt = st.session_state["_opt_resultados"]
+
+                    st.markdown("#### Resultados por variable")
+
+                    # Tabla resumen
+                    df_opt = pd.DataFrame([{
+                        "Variable":          r["variable"],
+                        "Estado":            r["estado"],
+                        "Rango objetivo":    r.get("rango", "—"),
+                        "Contrib. actual %": r["contri_actual"],
+                        "Contrib. nueva %":  r["contri_nueva"],
+                        "R² base":           r.get("r2_base", "—"),
+                        "R² nuevo":          r["r2_nuevo"],
+                        "Transformación recomendada": r["mejora_desc"],
+                    } for r in ropt])
+
+                    st.dataframe(df_opt, use_container_width=True, hide_index=True)
+
+                    # Detalle expandible por variable
+                    for r in ropt:
+                        if not r["mejor_combo"]:
+                            continue
+                        with st.expander(f"📋 Detalle: **{r['variable']}**  {r['estado']}"):
+                            c1, c2, c3 = st.columns(3)
+                            c1.metric("Contribución actual", f"{r['contri_actual']}%")
+                            c2.metric("Contribución nueva",  f"{r['contri_nueva']}%",
+                                      delta=f"{round(r['contri_nueva']-r['contri_actual'],2)}pp")
+                            c3.metric("R² nuevo", r["r2_nuevo"],
+                                      delta=f"{round(r['r2_nuevo']-r.get('r2_base', r['r2_nuevo']),4)}")
+
+                            st.markdown("**Parámetros recomendados:**")
+                            combo = r["mejor_combo"]
+                            if "adstock" in combo:
+                                ad = combo["adstock"]
+                                st.code(
+                                    f"adstockv3_v1(serie, fdecayRate={ad['fdecayRate']}, "
+                                    f"peak={ad['peak']}, length={ad['length']})",
+                                    language="python"
+                                )
+                            if "hill" in combo:
+                                hl = combo["hill"]
+                                st.code(
+                                    f"hill(serie, rho={hl['rho']:.2f}, p={hl['p']}, "
+                                    f"beta={hl['beta']}, alpha={hl['alpha']})",
+                                    language="python"
+                                )
+                            if combo.get("lag", 0) > 0:
+                                st.code(f"serie.shift({combo['lag']})", language="python")
+
+                            st.info(
+                                f"💡 Aplica estos parámetros en las pestañas **Adstock** / **Hill** / **Rezagos** "
+                                f"para la variable **{r['variable']}**, luego vuelve a ajustar el modelo."
+                            )
 
             # ── EXPORTAR ─────────────────────────────────────────────
             st.markdown("### Exportar")
